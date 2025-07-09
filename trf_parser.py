@@ -4,10 +4,17 @@ Simple parser for VidStab TRF (transform) binary files
 Usage: python3 trf_parser.py file1.trf [file2.trf]
 """
 
+import logging
+import math
+import os
 import struct
 import sys
-import os
-import math
+
+logging.basicConfig(
+    # filename=utils.get_home() + "/tmp/logfile.log",
+    level=logging.DEBUG,
+    format='%(asctime)s\t%(levelname)s\t%(filename)s:%(lineno)d\t%(message)s')
+log = logging.getLogger("sort_photos.py")  # %(name)s
 
 
 def export_to_ascii(transforms, output_file):
@@ -75,7 +82,7 @@ def parse_trf_header(data):
     # Check magic number
     magic = data[:4].decode('ascii', errors='ignore')
     if magic != 'TRF1':
-        print(f"Warning: Unexpected magic number: {magic}")
+        log.info(f"Warning: Unexpected magic number: {magic}")
         return None
 
     # Try to parse header structure (this is reverse-engineered)
@@ -125,7 +132,7 @@ def analyze_trf_data(data, header):
                 values = struct.unpack('<3f', data[offset:offset + 12])
                 transforms.append(values)
         except:
-            print("Could not parse transform data")
+            log.info("Could not parse transform data")
             return []
 
     return transforms
@@ -175,18 +182,18 @@ def calculate_stability_metrics(transforms):
 def analyze_trf_file(filename):
     """Analyze a single TRF file"""
     if not os.path.exists(filename):
-        print(f"Error: File {filename} not found")
+        log.info(f"Error: File {filename} not found")
         return None
 
-    print(f"=== Analysis of {filename} ===")
+    log.info(f"=== Analysis of {filename} ===")
 
     # Get file size
     file_size = os.path.getsize(filename)
-    print(f"File size: {file_size:,} bytes ({file_size / 1024 / 1024:.1f} MB)")
+    log.info(f"File size: {file_size:,} bytes ({file_size / 1024 / 1024:.1f} MB)")
 
     # Detect format
     file_format = detect_trf_format(filename)
-    print(f"File format: {file_format}")
+    log.info(f"File format: {file_format}")
 
     if file_format == 'ascii':
         transforms = parse_ascii_trf(filename)
@@ -197,9 +204,9 @@ def analyze_trf_file(filename):
         # Parse header
         header = parse_trf_header(data)
         if header:
-            print(f"Magic: {header['magic']}")
+            log.info(f"Magic: {header['magic']}")
             if 'frame_count' in header:
-                print(f"Frame count (from header): {header['frame_count']}")
+                log.info(f"Frame count (from header): {header['frame_count']}")
 
         # Try to detect the actual structure
         # Common structures: 24 bytes (6 floats), 32 bytes (8 floats), 48 bytes (12 floats)
@@ -215,7 +222,7 @@ def analyze_trf_file(filename):
                     frame_count = data_size // record_size
                     # Sanity check: reasonable frame count
                     if 100 < frame_count < 1000000:
-                        print(f"  Testing: header={header_size}B, record={record_size}B → {frame_count:,} frames")
+                        log.info(f"  Testing: header={header_size}B, record={record_size}B → {frame_count:,} frames")
 
                         # Try to parse a few frames to validate
                         valid = True
@@ -244,7 +251,7 @@ def analyze_trf_file(filename):
                             dx_rms = math.sqrt(sum(t[0] ** 2 for t in test_transforms) / len(test_transforms))
                             if dx_rms < 1000:  # Reasonable threshold
                                 best_config = (header_size, record_size, frame_count)
-                                print(f"    → Valid configuration found!")
+                                log.info(f"    → Valid configuration found!")
                                 break
 
             if best_config:
@@ -252,10 +259,11 @@ def analyze_trf_file(filename):
 
         if best_config:
             header_size, record_size, frame_count = best_config
-            print(f"\nDetected structure:")
-            print(f"  Header size: {header_size} bytes")
-            print(f"  Record size: {record_size} bytes ({record_size // 4} floats per frame)")
-            print(f"  Frame count: {frame_count:,}")
+            log.info("")
+            log.info("Detected structure:")
+            log.info(f"  Header size: {header_size} bytes")
+            log.info(f"  Record size: {record_size} bytes ({record_size // 4} floats per frame)")
+            log.info(f"  Frame count: {frame_count:,}")
 
             # Parse all transforms (or a subset for large files)
             transforms = []
@@ -282,13 +290,15 @@ def analyze_trf_file(filename):
                     break
 
             if len(transforms) < frame_count:
-                print(f"  (Parsed {len(transforms):,} frames for analysis)")
+                log.info(f"  (Parsed {len(transforms):,} frames for analysis)")
         else:
-            print("\nCould not detect valid structure, falling back to default parsing...")
+            log.info("")
+            log.info("Could not detect valid structure, falling back to default parsing...")
             transforms = analyze_trf_data(data, header)
 
     if transforms:
-        print(f"\nSuccessfully parsed {len(transforms):,} transforms")
+        log.info("")
+        log.info(f"Successfully parsed {len(transforms):,} transforms")
 
         # Filter out invalid values for metrics
         valid_transforms = []
@@ -297,24 +307,27 @@ def analyze_trf_file(filename):
                 valid_transforms.append(t)
 
         if valid_transforms:
-            print(f"Valid transforms: {len(valid_transforms):,} ({len(valid_transforms) / len(transforms) * 100:.1f}%)")
+            log.info(
+                f"Valid transforms: {len(valid_transforms):,} ({len(valid_transforms) / len(transforms) * 100:.1f}%)")
 
             # Calculate metrics only on valid transforms
             metrics = calculate_stability_metrics(valid_transforms)
 
-            print(f"\nStability Metrics:")
-            print(f"  Horizontal (dx): RMS={metrics['dx_rms']:.6f}, Mean abs={metrics['dx_mean_abs']:.6f}")
-            print(f"  Vertical (dy): RMS={metrics['dy_rms']:.6f}, Mean abs={metrics['dy_mean_abs']:.6f}")
+            log.info("")
+            log.info("Stability Metrics:")
+            log.info(f"  Horizontal (dx): RMS={metrics['dx_rms']:.6f}, Mean abs={metrics['dx_mean_abs']:.6f}")
+            log.info(f"  Vertical (dy): RMS={metrics['dy_rms']:.6f}, Mean abs={metrics['dy_mean_abs']:.6f}")
 
             if 'da_rms' in metrics:
-                print(f"  Angular (da): RMS={metrics['da_rms']:.6f}, Mean abs={metrics['da_mean_abs']:.6f}")
+                log.info(f"  Angular (da): RMS={metrics['da_rms']:.6f}, Mean abs={metrics['da_mean_abs']:.6f}")
 
-            print(f"  Instability Index: {metrics['instability_index']:.6f} (lower = better)")
+            log.info(f"  Instability Index: {metrics['instability_index']:.6f} (lower = better)")
 
             # Show sample of valid data
-            print(f"\nSample transforms (first 5 valid):")
+            log.info("")
+            log.info("Sample transforms (first 5 valid):")
             for i, t in enumerate(valid_transforms[:5]):
-                print(f"  Frame {i}: dx={t[0]:.4f}, dy={t[1]:.4f}, da={t[2]:.4f}")
+                log.info(f"  Frame {i}: dx={t[0]:.4f}, dy={t[1]:.4f}, da={t[2]:.4f}")
 
             # Add frame count to metrics
             metrics['frame_count'] = len(transforms)
@@ -322,26 +335,28 @@ def analyze_trf_file(filename):
 
             return metrics
         else:
-            print("No valid transform data found")
+            log.info("No valid transform data found")
             return None
     else:
-        print("Could not parse transform data")
+        log.info("Could not parse transform data")
         return None
 
 
 def compare_trf_files(file1, file2):
     """Compare two TRF files"""
-    print("\n" + "=" * 50)
-    print("COMPARISON SUMMARY")
-    print("=" * 50)
+    log.info("")
+    log.info("=" * 50)
+    log.info("COMPARISON SUMMARY")
+    log.info("=" * 50)
 
     metrics1 = analyze_trf_file(file1)
-    print("")
+    log.info("")
     metrics2 = analyze_trf_file(file2)
 
     if metrics1 and metrics2:
-        print(f"\n=== Comparison Results ===")
-        print(f"Frame count: {metrics1['frame_count']} vs {metrics2['frame_count']}")
+        log.info("")
+        log.info("=== Comparison Results ===")
+        log.info(f"Frame count: {metrics1['frame_count']} vs {metrics2['frame_count']}")
 
         # Compare instability indices
         if metrics1['instability_index'] < metrics2['instability_index']:
@@ -351,32 +366,35 @@ def compare_trf_files(file1, file2):
             better = file2
             diff = metrics1['instability_index'] - metrics2['instability_index']
 
-        print(f"\nInstability Index:")
-        print(f"  {file1}: {metrics1['instability_index']:.6f}")
-        print(f"  {file2}: {metrics2['instability_index']:.6f}")
-        print(f"  Difference: {diff:.6f}")
-        print(f"  Better file: {better}")
+        log.info("")
+        log.info("Instability Index:")
+        log.info(f"  {file1}: {metrics1['instability_index']:.6f}")
+        log.info(f"  {file2}: {metrics2['instability_index']:.6f}")
+        log.info(f"  Difference: {diff:.6f}")
+        log.info(f"  Better file: {better}")
 
         improvement_pct = (diff / max(metrics1['instability_index'], metrics2['instability_index'])) * 100
-        print(f"  Improvement: {improvement_pct:.1f}%")
+        log.info(f"  Improvement: {improvement_pct:.1f}%")
 
 
 def main():
     if len(sys.argv) < 2:
-        print("Usage: python3 trf_parser.py <command> [arguments]")
-        print("\nCommands:")
-        print("  analyse <file.trf>           Analyze a single TRF file")
-        print("  compare <file1.trf> <file2.trf>  Compare two TRF files")
-        print("\nThis script analyzes VidStab TRF binary files and extracts")
-        print("transformation data to evaluate stabilization quality.")
+        log.info("Usage: python3 trf_parser.py <command> [arguments]")
+        log.info("")
+        log.info("Commands:")
+        log.info("  analyse <file.trf>           Analyze a single TRF file")
+        log.info("  compare <file1.trf> <file2.trf>  Compare two TRF files")
+        log.info("")
+        log.info("This script analyzes VidStab TRF binary files and extracts")
+        log.info("transformation data to evaluate stabilization quality.")
         sys.exit(1)
 
     command = sys.argv[1].lower()
 
     if command == "analyse" or command == "analyze":  # Support both spellings
         if len(sys.argv) < 3:
-            print("Error: 'analyse' command requires a TRF file")
-            print("Usage: python3 trf_parser.py analyse <file.trf>")
+            log.info("Error: 'analyse' command requires a TRF file")
+            log.info("Usage: python3 trf_parser.py analyse <file.trf>")
             sys.exit(1)
 
         file1 = sys.argv[2]
@@ -384,8 +402,8 @@ def main():
 
     elif command == "compare":
         if len(sys.argv) < 4:
-            print("Error: 'compare' command requires two TRF files")
-            print("Usage: python3 trf_parser.py compare <file1.trf> <file2.trf>")
+            log.info("Error: 'compare' command requires two TRF files")
+            log.info("Usage: python3 trf_parser.py compare <file1.trf> <file2.trf>")
             sys.exit(1)
 
         file1 = sys.argv[2]
@@ -393,11 +411,13 @@ def main():
         compare_trf_files(file1, file2)
 
     else:
-        print(f"Error: Unknown command '{command}'")
-        print("\nAvailable commands:")
-        print("  analyse - Analyze a single TRF file")
-        print("  compare - Compare two TRF files")
-        print("\nRun 'python3 trf_parser.py' for full usage information")
+        log.info(f"Error: Unknown command '{command}'")
+        log.info("")
+        log.info("Available commands:")
+        log.info("  analyse - Analyze a single TRF file")
+        log.info("  compare - Compare two TRF files")
+        log.info("")
+        log.info("Run 'python3 trf_parser.py' for full usage information")
         sys.exit(1)
 
 
