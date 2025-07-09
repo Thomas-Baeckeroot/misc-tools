@@ -258,18 +258,42 @@ def compare_trf_files(file1, file2):
 
 def main():
     if len(sys.argv) < 2:
-        print("Usage: python3 trf_parser.py <file1.trf> [file2.trf]")
+        print("Usage: python3 trf_parser.py <command> [arguments]")
+        print("\nCommands:")
+        print("  analyse <file.trf>           Analyze a single TRF file")
+        print("  compare <file1.trf> <file2.trf>  Compare two TRF files")
         print("\nThis script analyzes VidStab TRF binary files and extracts")
-        print("transformation data to compare stabilization quality.")
+        print("transformation data to evaluate stabilization quality.")
         sys.exit(1)
 
-    file1 = sys.argv[1]
+    command = sys.argv[1].lower()
 
-    if len(sys.argv) >= 3:
-        file2 = sys.argv[2]
-        compare_trf_files(file1, file2)
-    else:
+    if command == "analyse" or command == "analyze":  # Support both spellings
+        if len(sys.argv) < 3:
+            print("Error: 'analyse' command requires a TRF file")
+            print("Usage: python3 trf_parser.py analyse <file.trf>")
+            sys.exit(1)
+
+        file1 = sys.argv[2]
         analyze_trf_file(file1)
+
+    elif command == "compare":
+        if len(sys.argv) < 4:
+            print("Error: 'compare' command requires two TRF files")
+            print("Usage: python3 trf_parser.py compare <file1.trf> <file2.trf>")
+            sys.exit(1)
+
+        file1 = sys.argv[2]
+        file2 = sys.argv[3]
+        compare_trf_files(file1, file2)
+
+    else:
+        print(f"Error: Unknown command '{command}'")
+        print("\nAvailable commands:")
+        print("  analyse - Analyze a single TRF file")
+        print("  compare - Compare two TRF files")
+        print("\nRun 'python3 trf_parser.py' for full usage information")
+        sys.exit(1)
 
 
 if __name__ == "__main__":
