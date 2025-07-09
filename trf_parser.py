@@ -180,45 +180,150 @@ def analyze_trf_file(filename):
 
     print(f"=== Analysis of {filename} ===")
 
-    # Read file
-    with open(filename, 'rb') as f:
-        data = f.read()
+    # Get file size
+    file_size = os.path.getsize(filename)
+    print(f"File size: {file_size:,} bytes ({file_size / 1024 / 1024:.1f} MB)")
 
-    print(f"File size: {len(data)} bytes")
+    # Detect format
+    file_format = detect_trf_format(filename)
+    print(f"File format: {file_format}")
 
-    # Parse header
-    header = parse_trf_header(data)
-    if header:
-        print(f"Magic: {header['magic']}")
-        if 'frame_count' in header:
-            print(f"Frame count: {header['frame_count']}")
-        if 'estimated_frames' in header:
-            print(f"Estimated frames: {header['estimated_frames']}")
+    if file_format == 'ascii':
+        transforms = parse_ascii_trf(filename)
+    else:  # binary or unknown, try binary
+        with open(filename, 'rb') as f:
+            data = f.read()
 
-    # Extract transforms
-    transforms = analyze_trf_data(data, header)
+        # Parse header
+        header = parse_trf_header(data)
+        if header:
+            print(f"Magic: {header['magic']}")
+            if 'frame_count' in header:
+                print(f"Frame count (from header): {header['frame_count']}")
+
+        # Try to detect the actual structure
+        # Common structures: 24 bytes (6 floats), 32 bytes (8 floats), 48 bytes (12 floats)
+        possible_sizes = [24, 32, 48, 52, 64]
+        header_sizes = [16, 20, 24, 32]  # Possible header sizes
+
+        best_config = None
+        for header_size in header_sizes:
+            for record_size in possible_sizes:
+                # Calculate expected frame count
+                data_size = file_size - header_size
+                if data_size % record_size == 0:
+                    frame_count = data_size // record_size
+                    # Sanity check: reasonable frame count
+                    if 100 < frame_count < 1000000:
+                        print(f"  Testing: header={header_size}B, record={record_size}B → {frame_count:,} frames")
+
+                        # Try to parse a few frames to validate
+                        valid = True
+                        test_transforms = []
+                        for i in range(min(10, frame_count)):
+                            offset = header_size + i * record_size
+                            if offset + record_size > len(data):
+                                valid = False
+                                break
+
+                            # Try to parse as floats
+                            num_floats = record_size // 4
+                            try:
+                                values = struct.unpack(f'<{num_floats}f', data[offset:offset + record_size])
+                                # Basic sanity check on values
+                                if any(math.isnan(v) or abs(v) > 10000 for v in values[:3]):
+                                    valid = False
+                                    break
+                                test_transforms.append(values[:3])
+                            except:
+                                valid = False
+                                break
+
+                        if valid and test_transforms:
+                            # Calculate RMS to check if values are reasonable
+                            dx_rms = math.sqrt(sum(t[0] ** 2 for t in test_transforms) / len(test_transforms))
+                            if dx_rms < 1000:  # Reasonable threshold
+                                best_config = (header_size, record_size, frame_count)
+                                print(f"    → Valid configuration found!")
+                                break
+
+            if best_config:
+                break
+
+        if best_config:
+            header_size, record_size, frame_count = best_config
+            print(f"\nDetected structure:")
+            print(f"  Header size: {header_size} bytes")
+            print(f"  Record size: {record_size} bytes ({record_size // 4} floats per frame)")
+            print(f"  Frame count: {frame_count:,}")
+
+            # Parse all transforms (or a subset for large files)
+            transforms = []
+            max_frames_to_parse = min(frame_count, 100000)  # Limit for memory
+
+            for i in range(max_frames_to_parse):
+                offset = header_size + i * record_size
+                if offset + record_size > len(data):
+                    break
+
+                num_floats = record_size // 4
+                try:
+                    values = struct.unpack(f'<{num_floats}f', data[offset:offset + record_size])
+                    # Take first 3 values (dx, dy, da)
+                    transform = list(values[:3])
+
+                    # Validate and fix extreme values
+                    for j in range(len(transform)):
+                        if math.isnan(transform[j]) or abs(transform[j]) > 10000:
+                            transform[j] = 0.0  # Reset extreme values
+
+                    transforms.append(transform)
+                except:
+                    break
+
+            if len(transforms) < frame_count:
+                print(f"  (Parsed {len(transforms):,} frames for analysis)")
+        else:
+            print("\nCould not detect valid structure, falling back to default parsing...")
+            transforms = analyze_trf_data(data, header)
 
     if transforms:
-        print(f"Successfully parsed {len(transforms)} transforms")
+        print(f"\nSuccessfully parsed {len(transforms):,} transforms")
 
-        # Calculate metrics
-        metrics = calculate_stability_metrics(transforms)
+        # Filter out invalid values for metrics
+        valid_transforms = []
+        for t in transforms:
+            if len(t) >= 3 and all(not math.isnan(v) and abs(v) < 10000 for v in t[:3]):
+                valid_transforms.append(t)
 
-        print(f"\nStability Metrics:")
-        print(f"  Horizontal (dx): RMS={metrics['dx_rms']:.6f}, Mean abs={metrics['dx_mean_abs']:.6f}")
-        print(f"  Vertical (dy): RMS={metrics['dy_rms']:.6f}, Mean abs={metrics['dy_mean_abs']:.6f}")
+        if valid_transforms:
+            print(f"Valid transforms: {len(valid_transforms):,} ({len(valid_transforms) / len(transforms) * 100:.1f}%)")
 
-        if 'da_rms' in metrics:
-            print(f"  Angular (da): RMS={metrics['da_rms']:.6f}, Mean abs={metrics['da_mean_abs']:.6f}")
+            # Calculate metrics only on valid transforms
+            metrics = calculate_stability_metrics(valid_transforms)
 
-        print(f"  Instability Index: {metrics['instability_index']:.6f} (lower = better)")
+            print(f"\nStability Metrics:")
+            print(f"  Horizontal (dx): RMS={metrics['dx_rms']:.6f}, Mean abs={metrics['dx_mean_abs']:.6f}")
+            print(f"  Vertical (dy): RMS={metrics['dy_rms']:.6f}, Mean abs={metrics['dy_mean_abs']:.6f}")
 
-        # Show sample data
-        print(f"\nSample transforms (first 5):")
-        for i, t in enumerate(transforms[:5]):
-            print(f"  Frame {i}: dx={t[0]:.4f}, dy={t[1]:.4f}, da={t[2]:.4f}")
+            if 'da_rms' in metrics:
+                print(f"  Angular (da): RMS={metrics['da_rms']:.6f}, Mean abs={metrics['da_mean_abs']:.6f}")
 
-        return metrics
+            print(f"  Instability Index: {metrics['instability_index']:.6f} (lower = better)")
+
+            # Show sample of valid data
+            print(f"\nSample transforms (first 5 valid):")
+            for i, t in enumerate(valid_transforms[:5]):
+                print(f"  Frame {i}: dx={t[0]:.4f}, dy={t[1]:.4f}, da={t[2]:.4f}")
+
+            # Add frame count to metrics
+            metrics['frame_count'] = len(transforms)
+            metrics['valid_frame_count'] = len(valid_transforms)
+
+            return metrics
+        else:
+            print("No valid transform data found")
+            return None
     else:
         print("Could not parse transform data")
         return None
