@@ -182,7 +182,7 @@ def calculate_stability_metrics(transforms):
 def analyze_trf_file(filename):
     """Analyze a single TRF file"""
     if not os.path.exists(filename):
-        log.info(f"Error: File {filename} not found")
+        log.error(f"File {filename} not found")
         return None
 
     log.info(f"=== Analysis of {filename} ===")
@@ -201,104 +201,192 @@ def analyze_trf_file(filename):
         with open(filename, 'rb') as f:
             data = f.read()
 
+        # Show hex dump of first 128 bytes for debugging
+        log.debug("First 128 bytes of file (hex dump):")
+        for i in range(0, min(128, len(data)), 16):
+            hex_str = ' '.join(f'{b:02x}' for b in data[i:i + 16])
+            ascii_str = ''.join(chr(b) if 32 <= b < 127 else '.' for b in data[i:i + 16])
+            log.debug(f"  {i:04x}: {hex_str:<48} |{ascii_str}|")
+
         # Parse header
         header = parse_trf_header(data)
         if header:
             log.info(f"Magic: {header['magic']}")
             if 'frame_count' in header:
-                log.info(f"Frame count (from header): {header['frame_count']}")
+                log.warning(f"Frame count (from header): {header['frame_count']} - This seems incorrect!")
+
+        # FIXME Below values are hard-coded for testing
+        # Expected frames based on video duration
+        # 4mn 35s @ 59.94 fps = 275.51s * 59.94 = ~16,514 frames
+        expected_frames = 16514
+        log.info(f"Expected frames for 4m35s @ 59.94fps: ~{expected_frames:,}")
+
+        # Calculate what record size would make sense
+        for header_size in [16, 20, 24, 32, 64]:
+            record_size = (file_size - header_size) / expected_frames
+            log.debug(f"If header={header_size}B: record size would be {record_size:.1f}B per frame")
 
         # Try to detect the actual structure
-        # Common structures: 24 bytes (6 floats), 32 bytes (8 floats), 48 bytes (12 floats)
-        possible_sizes = [24, 32, 48, 52, 64]
-        header_sizes = [16, 20, 24, 32]  # Possible header sizes
+        possible_sizes = [24, 32, 48, 52, 64, 96, 128, 256, 512, 1024, 2048, 2752, 2756, 2760]
+        header_sizes = [16, 20, 24, 32, 64, 128, 256]
 
         best_config = None
+        all_configs = []
+
+        log.debug("Testing different header/record size combinations...")
+
         for header_size in header_sizes:
             for record_size in possible_sizes:
                 # Calculate expected frame count
                 data_size = file_size - header_size
                 if data_size % record_size == 0:
                     frame_count = data_size // record_size
-                    # Sanity check: reasonable frame count
+                    # Keep track of all valid configurations
                     if 100 < frame_count < 1000000:
-                        log.info(f"  Testing: header={header_size}B, record={record_size}B → {frame_count:,} frames")
+                        diff_frames = abs(frame_count - expected_frames)
+                        all_configs.append((diff_frames, header_size, record_size, frame_count))
+
+                        if diff_frames < 100:  # Close to expected
+                            log.info(
+                                f"  GOOD MATCH: header={header_size}B, record={record_size}B → {frame_count:,} frames (diff: {frame_count - expected_frames:+,})")
 
                         # Try to parse a few frames to validate
                         valid = True
                         test_transforms = []
-                        for i in range(min(10, frame_count)):
+                        num_test_frames = min(20, frame_count)
+
+                        log.debug(
+                            f"  Testing config: header={header_size}B, record={record_size}B → {frame_count:,} frames")
+
+                        for i in range(num_test_frames):
                             offset = header_size + i * record_size
                             if offset + record_size > len(data):
                                 valid = False
+                                log.debug(f"    Failed: offset {offset} + {record_size} exceeds file size")
                                 break
 
                             # Try to parse as floats
-                            num_floats = record_size // 4
+                            num_floats = min(record_size // 4, 16)
                             try:
-                                values = struct.unpack(f'<{num_floats}f', data[offset:offset + record_size])
-                                # Basic sanity check on values
+                                values = struct.unpack(f'<{num_floats}f', data[offset:offset + num_floats * 4])
+
+                                # Log first few values for debugging
+                                if i < 3:
+                                    log.debug(f"    Frame {i} first 6 floats: {values[:6]}")
+
+                                # Basic sanity check on first 3 values (dx, dy, da)
                                 if any(math.isnan(v) or abs(v) > 10000 for v in values[:3]):
                                     valid = False
+                                    log.debug(f"    Failed: invalid values in frame {i}")
                                     break
                                 test_transforms.append(values[:3])
-                            except:
+                            except Exception as e:
                                 valid = False
+                                log.debug(f"    Failed to parse: {e}")
                                 break
 
                         if valid and test_transforms:
                             # Calculate RMS to check if values are reasonable
                             dx_rms = math.sqrt(sum(t[0] ** 2 for t in test_transforms) / len(test_transforms))
-                            if dx_rms < 1000:  # Reasonable threshold
-                                best_config = (header_size, record_size, frame_count)
-                                log.info(f"    → Valid configuration found!")
-                                break
+                            dy_rms = math.sqrt(sum(t[1] ** 2 for t in test_transforms) / len(test_transforms))
+                            log.debug(f"    RMS values: dx={dx_rms:.2f}, dy={dy_rms:.2f}")
 
-            if best_config:
+                            if dx_rms < 1000 and dy_rms < 1000:  # Reasonable threshold
+                                best_config = (header_size, record_size, frame_count)
+                                if diff_frames < 10:  # Very close match
+                                    log.info(f"    → EXCELLENT match! Using this configuration.")
+                                    break
+                                else:
+                                    log.info(f"    → Valid configuration found!")
+
+            if best_config and abs(best_config[2] - expected_frames) < 10:
                 break
+
+        # Show best configurations found
+        if all_configs:
+            log.info("")
+            log.info("Top 5 configurations by frame count match:")
+            for diff, h, r, f in sorted(all_configs)[:5]:
+                log.info(f"  header={h}B, record={r}B → {f:,} frames (diff from expected: {f - expected_frames:+,})")
 
         if best_config:
             header_size, record_size, frame_count = best_config
             log.info("")
-            log.info("Detected structure:")
+            log.info("Using detected structure:")
             log.info(f"  Header size: {header_size} bytes")
             log.info(f"  Record size: {record_size} bytes ({record_size // 4} floats per frame)")
             log.info(f"  Frame count: {frame_count:,}")
+
+            # Log what might be in the large record
+            if record_size > 48:
+                log.info(f"  Note: Large record size ({record_size}B) suggests vidstab stores additional data")
+                log.info(f"        Possible contents: motion vectors, feature points, confidence scores, etc.")
 
             # Parse all transforms (or a subset for large files)
             transforms = []
             max_frames_to_parse = min(frame_count, 100000)  # Limit for memory
 
+            log.info("")
+            log.info(f"Parsing {max_frames_to_parse:,} frames...")
+
+            parse_errors = 0
             for i in range(max_frames_to_parse):
                 offset = header_size + i * record_size
                 if offset + record_size > len(data):
+                    log.warning(f"Unexpected end of file at frame {i}")
                     break
 
-                num_floats = record_size // 4
                 try:
-                    values = struct.unpack(f'<{num_floats}f', data[offset:offset + record_size])
-                    # Take first 3 values (dx, dy, da)
-                    transform = list(values[:3])
+                    # Just extract first 3 floats (dx, dy, da)
+                    values = struct.unpack('<3f', data[offset:offset + 12])
+                    transform = list(values)
 
-                    # Validate and fix extreme values
-                    for j in range(len(transform)):
-                        if math.isnan(transform[j]) or abs(transform[j]) > 10000:
-                            transform[j] = 0.0  # Reset extreme values
+                    # Log samples and anomalies
+                    if i < 10 or i % 1000 == 0:
+                        log.debug(
+                            f"  Frame {i:5d}: dx={transform[0]:7.3f}, dy={transform[1]:7.3f}, da={transform[2]:7.3f}")
+
+                    if any(abs(v) > 100 for v in transform[:2]) or abs(transform[2]) > 3.14:
+                        log.warning(
+                            f"  Frame {i:5d}: Large transform detected: dx={transform[0]:.1f}, dy={transform[1]:.1f}, da={transform[2]:.3f}")
 
                     transforms.append(transform)
-                except:
-                    break
+                except Exception as e:
+                    parse_errors += 1
+                    if parse_errors < 10:
+                        log.error(f"Error parsing frame {i}: {e}")
+
+            if parse_errors > 0:
+                log.warning(f"Total parse errors: {parse_errors}")
 
             if len(transforms) < frame_count:
-                log.info(f"  (Parsed {len(transforms):,} frames for analysis)")
+                log.info(f"Parsed {len(transforms):,} frames out of {frame_count:,}")
         else:
+            log.warning("")
+            log.warning("Could not detect valid structure!")
+            log.info("This might be due to:")
+            log.info("  1. Unknown TRF format version")
+            log.info("  2. Corrupted file")
+            log.info("  3. Non-standard vidstab build")
+
             log.info("")
-            log.info("Could not detect valid structure, falling back to default parsing...")
+            log.info("Falling back to default parsing (assuming 24 bytes per record)...")
             transforms = analyze_trf_data(data, header)
 
     if transforms:
         log.info("")
         log.info(f"Successfully parsed {len(transforms):,} transforms")
+
+        # Show distribution of values
+        if len(transforms) > 100:
+            dx_vals = [t[0] for t in transforms[:1000]]
+            dy_vals = [t[1] for t in transforms[:1000]]
+            da_vals = [t[2] for t in transforms[:1000]]
+
+            log.debug("Value distribution (first 1000 frames):")
+            log.debug(f"  dx: min={min(dx_vals):.3f}, max={max(dx_vals):.3f}, median={sorted(dx_vals)[500]:.3f}")
+            log.debug(f"  dy: min={min(dy_vals):.3f}, max={max(dy_vals):.3f}, median={sorted(dy_vals)[500]:.3f}")
+            log.debug(f"  da: min={min(da_vals):.3f}, max={max(da_vals):.3f}, median={sorted(da_vals)[500]:.3f}")
 
         # Filter out invalid values for metrics
         valid_transforms = []
