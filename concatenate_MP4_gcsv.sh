@@ -132,8 +132,8 @@ if [[ $# -eq 0 ]]; then
     printf "  - ffmpeg must be installed and available in PATH\n"
     printf "  - Input files must exist in current directory\n"
     printf "  - File IDs must be 4-digit numbers\n"
-    exit 0
+    return 0
 else
     concatenate_MP4_gcsv "$1" "$2"
-    exit $?
+    return $?
 fi
