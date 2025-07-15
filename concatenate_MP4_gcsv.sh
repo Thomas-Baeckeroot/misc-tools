@@ -3,31 +3,33 @@
 # Script to concatenate RunCam Thumb2 video files (MP4) and gyroscope data files (GCSV)
 # Usage: ./concatenate_MP4_gcsv.sh 0043 0044
 
+export MP4GCSV_PREFIX="Thumb2_"
+
 function concatenate_MP4() {
-    local video_file_a="Thumb2_$1.MP4"
-    local video_file_b="Thumb2_$2.MP4"
-    local video_out="Thumb2_$1+$2.MP4"
+    local video_file_a="${MP4GCSV_PREFIX}$1.MP4"
+    local video_file_b="${MP4GCSV_PREFIX}$2.MP4"
+    local video_out="${MP4GCSV_PREFIX}$1+$2.MP4"
     
     # Check if input files exist
     if [[ ! -f "$video_file_a" ]]; then
-        echo "Error: Video file $video_file_a not found" >&2
+        printf "Error: Video file $video_file_a not found\n" >&2
         return 1
     fi
     
     if [[ ! -f "$video_file_b" ]]; then
-        echo "Error: Video file $video_file_b not found" >&2
+        printf "Error: Video file $video_file_b not found\n" >&2
         return 1
     fi
     
     # Create temporary file list for ffmpeg
-    local temp_list="/tmp/concatenate_MP4_list_$$.txt"
+    local temp_list="concatenate_MP4_list_$$.txt"
     printf "file '%s'\nfile '%s'" "$video_file_a" "$video_file_b" > "$temp_list"
     
-    echo "Concatenating video files: $video_file_a + $video_file_b -> $video_out"
+    printf "Concatenating video files: $video_file_a + $video_file_b -> $video_out\n"
     
     # Use ffmpeg to concatenate videos
     if ffmpeg -f concat -safe 0 -i "$temp_list" -c copy "$video_out" -y; then
-        echo "Video concatenation successful: $video_out"
+        printf "Video concatenation successful: $video_out\n"
         rm -f "$temp_list"
         return 0
     else
@@ -38,22 +40,22 @@ function concatenate_MP4() {
 }
 
 function concatenate_gcsv() {
-    local giro_file_a="Thumb2_$1.gcsv"
-    local giro_file_b="Thumb2_$2.gcsv"
-    local giro_out="Thumb2_$1+$2.gcsv"
+    local giro_file_a="${MP4GCSV_PREFIX}$1.gcsv"
+    local giro_file_b="${MP4GCSV_PREFIX}$2.gcsv"
+    local giro_out="${MP4GCSV_PREFIX}$1+$2.gcsv"
     
     # Check if input files exist
     if [[ ! -f "$giro_file_a" ]]; then
-        echo "Error: Gyroscope file $giro_file_a not found" >&2
+        printf "Error: Gyroscope file $giro_file_a not found\n" >&2
         return 1
     fi
     
     if [[ ! -f "$giro_file_b" ]]; then
-        echo "Error: Gyroscope file $giro_file_b not found" >&2
+        printf "Error: Gyroscope file $giro_file_b not found\n" >&2
         return 1
     fi
     
-    echo "Concatenating gyroscope files: $giro_file_a + $giro_file_b -> $giro_out"
+    printf "Concatenating gyroscope files: $giro_file_a + $giro_file_b -> $giro_out\n"
     
     # Merge the two GCSV files
     # First file: copy entirely
@@ -72,7 +74,7 @@ function concatenate_gcsv() {
     fi
     
     if [[ $? -eq 0 ]]; then
-        echo "Gyroscope concatenation successful: $giro_out"
+        printf "Gyroscope concatenation successful: $giro_out\n"
         return 0
     else
         echo "Error: Gyroscope concatenation failed" >&2
@@ -93,7 +95,7 @@ function concatenate_MP4_gcsv() {
         return 1
     fi
     
-    echo "Starting concatenation process for files $1 and $2"
+    printf "Starting concatenation process for files $1 and $2\n"
     
     # Concatenate MP4 files
     if concatenate_MP4 "$1" "$2"; then
@@ -115,25 +117,33 @@ function concatenate_MP4_gcsv() {
     return 0
 }
 
+is_sourced() {
+    [[ "${BASH_SOURCE[1]}" != "${0}" ]]
+}
+
 # Main script execution
-if [[ $# -eq 0 ]]; then
-    printf "RunCam Thumb2 File Concatenation Script\n"
-    printf "=======================================\n\n"
-    printf "This script concatenates MP4 video files and GCSV gyroscope data files.\n\n"
-    printf "Usage:\n"
-    printf "  %s <file_id_1> <file_id_2>\n\n" "$0"
-    printf "Examples:\n"
-    printf "  %s 0043 0044\n" "$0"
-    printf "  %s 0001 0002\n\n" "$0"
-    printf "Alternative usage (sourcing the script):\n"
-    printf "  source %s\n" "$0"
-    printf "  concatenate_MP4_gcsv 0043 0044\n\n"
-    printf "Requirements:\n"
-    printf "  - ffmpeg must be installed and available in PATH\n"
-    printf "  - Input files must exist in current directory\n"
-    printf "  - File IDs must be 4-digit numbers\n"
-    return 0
+if is_sourced; then
+    printf "$(basename "${BASH_SOURCE[0]}") - Functions loaded. Use: concatenate_MP4_gcsv <id1> <id2>\n"
 else
-    concatenate_MP4_gcsv "$1" "$2"
-    return $?
+    if [[ $# -eq 0 ]]; then
+        printf "RunCam Thumb2 File Concatenation Script\n"
+        printf "=======================================\n\n"
+        printf "This script concatenates MP4 video files and GCSV gyroscope data files.\n\n"
+        printf "Usage:\n"
+        printf "  %s <file_id_1> <file_id_2>\n\n" "$0"
+        printf "Examples:\n"
+        printf "  %s 0043 0044\n" "$0"
+        printf "  %s 0001 0002\n\n" "$0"
+        printf "Alternative usage (sourcing the script):\n"
+        printf "  source %s\n" "$0"
+        printf "  concatenate_MP4_gcsv 0043 0044\n\n"
+        printf "Requirements:\n"
+        printf "  - ffmpeg must be installed and available in PATH\n"
+        printf "  - Input files must exist in current directory\n"
+        printf "  - File IDs must be 4-digit numbers\n"
+        exit 0
+    else
+        concatenate_MP4_gcsv "$1" "$2"
+        exit $?
+    fi
 fi
